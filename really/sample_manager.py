@@ -1,433 +1,263 @@
 import os, logging
-from datetime import datetime
-import glob
 
 # only print error messages
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-import ray
 import tensorflow as tf
-import gridworlds
-import gym
 import numpy as np
-from really.agent import Agent
-from really.runner_box import RunnerBox
-from really.buffer import Replay_buffer
-from really.agg import Smoothing_aggregator
-from really.utils import all_subdirs_of
+import random
+from scipy.stats import norm, lognorm
 
 
-class SampleManager:
 
+class Agent:
     """
-    @args:
-        model: model Object, model: tf.keras.Model (or model imitating a tf model) returning dictionary with the possible keys: 'q_values' or 'policy' or 'mus' and 'sigmas' for continuous policies, optional 'value_estimate', containing tensors
-        environment: string specifying gym environment or object of custom gym-like (implementing the same methods) environment
-        num_parallel: int, number of how many agents to run in parall
-        total_steps: int, how many steps to collect for the experience replay
-        returns: list of strings specifying what is to be returned by the box
-            supported are: 'value_estimate', 'log_prob', 'monte_carlo'
-        actin_sampling_type: string, type of sampling actions, supported are 'epsilon_greedy', 'thompson', 'discrete_policy' or 'continuous_normal_diagonal'
-
-    @kwargs:
-        model_kwargs: dict, optional model initialization specifications
-        weights: optional, weights which can be loaded into the agent for remote data collecting
-        input_shape: shape or boolean (if shape not needed for first call of model), defaults shape of the environments reset state
-
-        env_config: dict, opitonal configurations for environment creation if a custom environment is used
-
-        num_episodes: specifies the total number of episodes to run on the environment for each runner, defaults to 1
-        num_steps: specifies the total number of steps to run on the environment for each runner
-
-        gamma: float, discount factor for monte carlo return, defaults to 0.99
-        temperature: float, temperature for thomson sampling, defaults to 1
-        epsilon: epsilon for epsilon greedy sampling, defaults to 0.95
-
-        remote_min_returns: int, minimum number of remote runner results to wait for, defaults to 10% of num_parallel
-        remote_time_out: float, maximum amount of time (in seconds) to wait on the remote runner results, defaults to None
+    Agent wrapper:
+        @args
+            model: tf.keras.Model (or simply callable bit than some functionalities are not supported) returning dictionary with the possible keys: 'q_values' or 'policy' or 'mus' and 'sigmas' for continuous policies, optional 'value_estimate', containing tensors
+            weights: None or weights of the model
+            action_sampling_type: string, supported are 'thompson', 'epsilon_greedy', 'discrete_policy' and 'continuous_normal_diagonal'
+            epsilon: float for epsilon greedy sampling
+            temperature: float for thompson sampling
+            value_estimate: boolean if agent returns value estimate
+            model_kwargs: dict, optional model initialization specifications
+            is_tf: boolean if model init is needed
+            test: boolean, if testing (only greedy sampling)
     """
 
     def __init__(
-        self, model, environment, num_parallel, total_steps, returns=[], **kwargs
+        self,
+        model,
+        weights=None,
+        action_sampling_type="thompson",
+        temperature=1,
+        epsilon=0.95,
+        value_estimate=False,
+        input_shape=None,
+        model_kwargs={},
+        is_tf=True,
+        test=False,
     ):
 
-        self.model = model
-        self.environment = environment
-        self.num_parallel = num_parallel
-        self.total_steps = total_steps
-        self.buffer = None
+        super(Agent, self).__init__
+        #logging.basicConfig(
+        #    filename=f"logging/agent.log", level=logging.DEBUG
+        #)
+        self.model_kwargs = model_kwargs
+        self.model = model(**self.model_kwargs)
 
-        # create gym / custom gym like environment
-        if isinstance(self.environment, str):
-            self.env_instance = gym.make(self.environment)
-        else:
-            env_kwargs = {}
-            if "env_kwargs" in kwargs.keys():
-                env_kwargs = kwargs["env_kwargs"]
-                kwargs.pop("env_kwargs")
-            self.env_instance = self.env_creator(self.environment, **env_kwargs)
+        self.weights = weights
+        if is_tf:
+            self.initialize_model(self.model, input_shape)
+        self.model.set_weights(weights)
 
-
-        # specify input shape if not given
-        if not ("input_shape" in kwargs):
-            state = self.env_instance.reset()
-            state = np.expand_dims(state, axis=0)
-            kwargs["input_shape"] = state.shape
-
-        # if no model_kwargs given set to empty
-        if not ("model_kwargs") in kwargs:
-            kwargs["model_kwargs"] = {}
-
-        # initilize random weights if not given
-        if not('weights' in kwargs.keys()):
-            random_weights = self.initialize_weights(self.model, kwargs['input_shape'], kwargs['model_kwargs'])
-            kwargs['weights'] = random_weights
-
-        kwargs['test'] = False
-        self.kwargs = kwargs
-        ## some checkups
-
-        assert self.num_parallel > 0, "num_parallel hast to be greater than 0!"
-
-        self.kwargs['discrete_env'] = True
-        # check action sampling type
-        if "action_sampling_type" in kwargs.keys():
-            type = kwargs["action_sampling_type"]
-            if type not in ["thompson", "epsilon_greedy", "discrete_policy", "continuous_normal_diagonal"]:
-                print(
-                    f"unsupported sampling type: {type}. assuming sampling from a discrete policy instead."
-                )
-                self.kwargs["action_sampling_type"] = "discrete_policy"
-            if type == 'continuous_normal_diagonal':
-                self.discrete_env = False
-                self.kwargs['discrete_env'] = False
+        self.action_sampling_type = action_sampling_type
+        self.temperature = temperature
+        self.epsilon = epsilon
+        self.value_estimate = value_estimate
+        self.test = test
 
 
-        if not ("temperature" in self.kwargs.keys()):
-            self.kwargs["temperature"] = 1
-        if not ("epsilon" in self.kwargs.keys()):
-            self.kwargs["epsilon"] = 0.95
-        # chck return specifications
-        for r in returns:
-            if r not in ["log_prob", "monte_carlo", "value_estimate"]:
-                print(f"unsuppoerted return key: {r}")
-                returns.pop(r)
-            if r == "value_estimate":
-                    self.kwargs["value_estimate"] = True
-        self.returns = returns
+    def set_weights(self, weights):
+        self.model.set_weights(weights)
 
-        # check for runner sampling method:
-        # error if both are specified
-        self.run_episodes = True
-        self.runner_steps = 1
-        if "num_episodes" in kwargs.keys():
-            self.runner_steps = kwargs["num_episodes"]
-            if "num_steps" in kwargs.keys():
-                print(
-                    "Both episode mode and step mode for runner sampling are specified. Please only specify one."
-                )
-                raise ValueError
-            self.kwargs.pop("num_episodes")
-        elif "num_steps" in kwargs.keys():
-            self.runner_steps = kwargs["num_steps"]
-            self.run_episodes = False
-            self.kwargs.pop("num_steps")
+    def get_weights(self):
+        return self.model.get_weights()
 
-        # check for remote process specifications
-        if "remote_min_returns" in kwargs.keys():
-            self.remote_min_returns = kwargs["remote_min_returns"]
-            self.kwargs.pop("remote_min_returns")
-        else:
-            # defaults to 10% of remote runners, but minimum 1
-            self.remote_min_returns = max([int(0.1 * self.num_parallel), 1])
+    def initialize_model(self, model, input_dummy):
 
-        if "remote_time_out" in kwargs.keys():
-            self.remote_time_out = kwargs["remote_time_out"]
-            self.kwargs.pop("remote_time_out")
-        else:
-            # defaults to None, i.e. wait for remote_min_returns to be returned irrespective of time
-            self.remote_time_out = None
-
-        self.reset_data()
-        # # TODO: print info on setup values
-
-    def reset_data(self):
-        # initilize empty datasets aggregator
-        self.data = {}
-        self.data["action"] = []
-        self.data["state"] = []
-        self.data["reward"] = []
-        self.data["state_new"] = []
-        self.data["not_done"] = []
-        for r in self.returns:
-            self.data[r] = []
-
-
-    def initialize_weights(self, model, input_shape, model_kwargs):
-        model_inst = model(**model_kwargs)
-        if not(input_shape):
-            return model_inst.get_weights()
         if hasattr(model, "tensorflow"):
             assert (
-                input_shape != None
+                input_dummy != None
             ), 'You have a tensorflow model with no input shape specified for weight initialization. \n Specify input_shape in "model_kwargs" or specify as False if not needed'
-        dummy = np.zeros(input_shape)
-        model_inst(dummy)
-        weights = model_inst.get_weights()
+        model(input_dummy)
 
-        return weights
 
-    def get_data(self, do_print=False, total_steps=None):
+    # agent readout handler
+    def act_experience(self, state, return_log_prob=False):
+        output = {}
+        # creating network dict
+        network_out = self.model(state)
 
-        self.reset_data()
-        if total_steps is not None:
-            old_steps = self.total_steps
-            self.total_steps = total_steps
+        if self.test:
+            old_e = self.epsilon
+            self.epsilon = 0
+            old_t = self.temperature
+            self.temperature = 0.000001
 
-        not_done = True
-        # create list of runnor boxes
-        runner_boxes = [
-            RunnerBox.remote(
-                Agent,
-                self.model,
-                self.env_instance,
-                runner_position=i,
-                returns=self.returns,
-                **self.kwargs,
-            )
-            for i in range(self.num_parallel)
-        ]
-        t = 0
-
-        # initial processes
-        if self.run_episodes:
-            runner_processes = [b.run_n_episodes.remote(self.runner_steps) for b in runner_boxes]
-        else:
-            runner_processes = [b.run_n_steps.remote(self.runner_steps) for b in runner_boxes]
-
-        # run as long as not yet reached number of total steps
-        while not_done:
-
-            ready, remaining = ray.wait(
-                runner_processes,
-                num_returns=self.remote_min_returns,
-                timeout=self.remote_time_out
-                )
-            # boxes returns list of tuples (data_agg, index)
-            returns = ray.get(ready)
-            results = []
-            indexes = []
-            for r in returns:
-                result, index = r
-                results.append(result)
-                indexes.append(index)
-
-            # store data from dones
-            if do_print:
-                print(f"iteration: {t}, storing results of {len(results)} runners")
-            not_done = self._store(results)
-            # get boxes that are alreadey done
-            accesed_mapping = map(runner_boxes.__getitem__, indexes)
-            done_runners = list(accesed_mapping)
-            # create new processes
-            if self.run_episodes:
-                new_processes = [b.run_n_episodes.remote(self.runner_steps) for b in done_runners]
-
+        if self.action_sampling_type == "epsilon_greedy":
+            logits = network_out["q_values"]
+            if tf.is_tensor(logits):
+                logits = logits.numpy()
+            if random.random() > self.epsilon:
+                action = np.argmax(logits, axis=-1)
+                # log prob of epsilon
+                if return_log_prob:
+                    output["log_probability"] = np.asarray(
+                        [np.log(self.epsilon+0.00000001)] * logits.shape[0], dtype=np.float32
+                        )
             else:
-                new_processes = [b.run_n_steps.remote(self.runner_steps) for b in done_runners]
+                # log prob of 1-epsilon
+                action = [
+                    random.randrange(logits.shape[-1]) for _ in range(logits.shape[0])
+                ]
+                action = np.asarray(action)
+                if return_log_prob:
+                    output["log_probability"] = np.asarray(
+                        [np.log(1 - self.epsilon+0.00000001)] * logits.shape[0], dtype=np.float32
+                        )
+            output["action"] = action
 
-            # concatenate old and new processes
-            runner_processes = remaining + new_processes
-            t += 1
+        elif self.action_sampling_type == "thompson":
+            # q values
+            logits = network_out["q_values"]
+            logits = tf.nn.softmax(logits)
+            action = tf.squeeze(tf.random.categorical(logits / self.temperature, 1)).numpy()
+            output["action"] = action
+            action = action.tolist()
+            if tf.is_tensor(logits):
+                logits = logits.numpy()
+            if return_log_prob:
+                if logits.shape[0] > 1:
+                    output["log_probability"] = np.log(
+                        [logits[i][a] for i, a in zip(range(logits.shape[0]), action)]
+                    )
+                else:
+                    output["log_probability"] = np.log(
+                        [logits[0][action]]
+                    )
 
-        if total_steps is not None:
-            self.total_steps = old_steps
+        elif self.action_sampling_type == "continuous_normal_diagonal":
 
-        return self.data
+            mus, sigmas = network_out["mu"].numpy(), network_out["sigma"].numpy()
+            action = norm.rvs(mus, sigmas)
+            output["action"] = action
+            logging.warning('action')
+            logging.warning(action)
 
-    # stores results and asserts if we are done
-    def _store(self, results):
-        not_done = True
-        # results is a list of dctinaries
-        assert (
-            self.data.keys() == results[0].keys()
-        ), "data keys and return keys do not matach"
+            if return_log_prob:
+                output["log_probability"] = np.sum(norm.logpdf(action, mus, sigmas))
 
-        for r in results:
-            for k in self.data.keys():
-                self.data[k].extend(r[k])
+        elif self.action_sampling_type == "discrete_policy":
+            logits = network_out["policy"]
+            if self.test:
+                action = np.argmax(logits, axis=-1)
+            else:
+                action = tf.squeeze(tf.random.categorical(logits,1)).numpy()
+            output["action"] = action
+            action = action.tolist()
+            if tf.is_tensor(logits):
+                logits = logits.numpy()
+            if return_log_prob:
+                if logits.shape[0]>1:
+                    output["log_probability"] = np.log(
+                        [logits[i][a] for i, a in zip(range(logits.shape[0]), action)]
+                        )
+                else:
+                    output["log_probability"] = np.log(
+                        [logits[0][action]]
+                        )
 
-        # stop if enought data is aggregated
-        if len(self.data["state"]) > self.total_steps:
-            not_done = False
-
-        return not_done
-
-    def sample(self, sample_size, from_buffer=True):
-        # sample from buffer
-        if from_buffer:
-            dict = self.buffer.sample(sample_size)
         else:
+            # logging.warning(f'unsupported sampling method {self.actin_sampling_type}')
+            raise NotImplemented
 
-            dict = self.get_data(total_steps=sample_size)
+        # pass on value estimate if there
+        if self.value_estimate:
+            output["value_estimate"] = network_out["value_estimate"]
 
-        return dict
+        if self.test:
+            self.epsilon = old_e
+            self.temperature = old_t
 
-    def get_agent(self, test=False):
+        return output
 
-        if test:
-            self.kwargs['test'] = True
+    def act(self, state):
+        net_out = self.act_experience(state)
+        return net_out["action"]
 
-        # get agent specifications from runner box
-        runner_box = RunnerBox.remote(
-            Agent,
-            self.model,
-            self.env_instance,
-            runner_position=0,
-            returns=self.returns,
-            **self.kwargs,
-        )
-        agent_kwargs = ray.get(runner_box.get_agent_kwargs.remote())
-        agent = Agent(self.model, **agent_kwargs)
+    def max_q(self, x):
+        # computes the maximum q-value along each batch dimension
+        model_out = self.model(x)
+        x = tf.reduce_max(model_out["q_values"], axis=-1)
+        return x
 
-        if test:
-            self.kwargs['test'] = False
+    def q_val(self, x, actions):
+        model_out = self.model(x)
+        q_values = model_out["q_values"]
+        x = tf.gather(q_values, actions, batch_dims=1)
+        x = tf.expand_dims(x, axis=-1)
+        return x
 
-        return agent
+    def v(self, x):
+        model_out=self.model(x)
+        v = model_out["value_estimate"]
+        return v
 
-    def set_agent(self, new_weights):
-        self.kwargs["weights"] = new_weights
+    def flowing_log_prob(self, state, action, return_entropy=False):
+        action = tf.cast(action, dtype=tf.float32)
+        network_out = self.model(state)
 
-    def set_temperature(self, temperature):
-        self.kwargs["temperature"] = temperature
+        if self.action_sampling_type == 'continuous_normal_diagonal':
+            mus, sigmas = network_out["mu"], network_out["sigma"]
+            dist = tf.compat.v1.distributions.Normal(mus, sigmas)
+            log_prob = dist.log_prob(action)
+            if return_entropy:
+                firs_step = tf.constant(np.exp(1), dtype=tf.float32)*(tf.square(sigmas))
+                second_step = tf.constant(0.5, dtype=tf.float32) * tf.math.log(2*tf.constant(np.pi, dtype=tf.float32))
+                entropy = firs_step * second_step
+                return log_prob, entropy
+            return log_prob
 
-    def set_epsilon(self, epsilon):
-        self.kwargs["epsilon"] = epsilon
+        elif self.action_sampling_type == "thompson":
+            logits = network_out["q_values"]
+            logits = tf.nn.softmax(logits)
+            action = tf.cast(action, dtype=tf.int64).numpy().tolist()
+            if logits.shape[0]>1:
+                log_prob = tf.math.log(
+                    [logits[i][a] for i, a in zip(range(logits.shape[0]), action)]
+                    )
+            else:
+                log_prob = tf.math.log(
+                    [logits[0][action]]
+                    )
+            log_prob = tf.expand_dims(log_prob, -1)
+            if return_entropy:
+                entropy = -tf.reduce_sum(logits * tf.math.log(logits), axis=-1)
+                entropy = tf.expand_dims(entropy, -1)
+                return log_prob, entropy
+            return log_prob
 
-    def initilize_buffer(
-        self, size, optim_keys=["state", "action", "reward", "state_new", "not_done"]
-    ):
-        self.buffer = Replay_buffer(size, optim_keys)
 
-    def store_in_buffer(self, data_dict):
-        self.buffer.put(data_dict)
+        elif self.action_sampling_type == "discrete_policy":
+            logits = network_out["policy"]
 
-    def test(
-        self,
-        max_steps,
-        test_episodes=100,
-        evaluation_measure="time",
-        render=False,
-        do_print=False,
-    ):
+            action = tf.cast(action, dtype=tf.int64).numpy().tolist()
+            if logits.shape[0]>1:
+                log_prob = tf.math.log(
+                    [logits[i][a] for i, a in zip(range(logits.shape[0]), action)]
+                    )
+            else:
+                log_prob = tf.math.log(
+                    [logits[0][action]]
+                    )
+            log_prob = tf.expand_dims(log_prob, -1)
+            if return_entropy:
+                entropy = -tf.reduce_sum(logits * tf.math.log(logits), axis=-1)
+                entropy = tf.expand_dims(entropy, -1)
+                return log_prob, entropy
+            else: return log_prob
 
-        env = self.env_instance
-        agent = self.get_agent(test=True)
 
-        # get evaluation specs
-        return_time = False
-        return_reward = False
+        elif self.action_sampling_type == 'epsilon_greedy':
+            logits = network_out["q_values"]
+            if tf.is_tensor(logits):
+                logits = logits.numpy()
+            log_prob = np.asarray(
+                    [np.log(self.epsilon+0.00000001)] * logits.shape[0]
+                    )
+            return tf.cast(tf.expand_dims(log_prob, -1), dtype=tf.float32)
 
-        if evaluation_measure == "time":
-            return_time = True
-            time_steps = []
-        elif evaluation_measure == "reward":
-            return_reward = True
-            rewards = []
-        elif evaluation_measure == "time_and_reward":
-            return_time = True
-            return_reward = True
-            time_steps = []
-            rewards = []
+
         else:
-            print(
-                f"unrceognized evaluation measure: {evaluation_measure} \n Change to 'time', 'reward' or 'time_and_reward'."
-            )
-            raise ValueError
-
-        for e in range(test_episodes):
-            state_new = np.expand_dims(env.reset(), axis=0)
-            if return_reward:
-                reward_per_episode = []
-
-            for t in range(max_steps):
-                if render:
-                    env.render()
-                state = state_new
-                action = agent.act(state)
-                # check if action is tf
-                if tf.is_tensor(action):
-                    action = action.numpy()
-                if self.kwargs['discrete_env']:
-                    action = int(action)
-                state_new, reward, done, info = env.step(action)
-                state_new = np.expand_dims(state_new, axis=0)
-                if return_reward:
-                    reward_per_episode.append(reward)
-                if done:
-                    if return_time:
-                        time_steps.append(t)
-                    if return_reward:
-                        rewards.append(np.mean(reward_per_episode))
-                    break
-                if t == max_steps - 1:
-                    if return_time:
-                        time_steps.append(t)
-                    if return_reward:
-                        rewards.append(np.mean(reward_per_episode))
-                    break
-
-        env.close()
-
-        if return_time & return_reward:
-            if do_print:
-                print(
-                    f"Episodes finished after a mean of {np.mean(time_steps)} timesteps"
-                )
-                print(
-                    f"Episodes finished after a mean of {np.mean(rewards)} accumulated reward"
-                )
-            return time_steps, rewards
-        elif return_time:
-            if do_print:
-                print(
-                    f"Episodes finished after a mean of {np.mean(time_steps)} timesteps"
-                )
-            return time_steps
-        elif return_reward:
-            if do_print:
-                print(
-                    f"Episodes finished after a mean of {np.mean(rewards)} accumulated reward"
-                )
-            return rewards
-
-    def initialize_aggregator(self, path, saving_after=10, aggregator_keys=["loss"], max_size=5, init_epoch=0):
-        self.agg = Smoothing_aggregator(path, saving_after, aggregator_keys, max_size, init_epoch)
-
-    def update_aggregator(self, **kwargs):
-        self.agg.update(**kwargs)
-
-    def env_creator(self, object, **kwargs):
-        return object(**kwargs)
-
-    def save_model(self, path, epoch, model_name="model"):
-        time_stamp = datetime.now().strftime("%d-%m-%Y_%I-%M-%S_%p")
-        full_path = f"{path}/{model_name}_{epoch}_{time_stamp}"
-        agent = self.get_agent()
-        print("saving model...")
-        agent.model.save(full_path)
-
-    def load_model(self, path, model_name=None):
-        if model_name is not None:
-            # # TODO:
-            print("specific model loading not yet implemented")
-        else:
-            pass
-        # alweys leads the latest model
-        subdirs = all_subdirs_of(path)
-        latest_subdir = max(subdirs, key=os.path.getmtime)
-        print("loading model...")
-        model = tf.keras.models.load_model(latest_subdir)
-        weights = model.get_weights()
-        self.set_agent(weights)
-        agent = self.get_agent()
-        return agent
+            print(f"flowing log probabilities not yet implemented for sampling type {self.action_sampling_type}")
+            raise NotImplemented

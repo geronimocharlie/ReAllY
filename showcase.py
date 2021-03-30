@@ -78,9 +78,9 @@ if __name__ == "__main__":
     optim_keys = ["state", "action", "reward", "state_new", "not_done"]
 
     # initialize buffer
-    manager.initilize_buffer(buffer_size, optim_keys)
+    manager.initialize_buffer(buffer_size, optim_keys)
 
-    # initilize progress aggregator
+    # initialize progress aggregator
     manager.initialize_aggregator(
         path=saving_path, saving_after=5, aggregator_keys=["loss", "time_steps"]
     )

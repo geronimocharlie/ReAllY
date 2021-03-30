@@ -20,6 +20,8 @@ class Agent:
             temperature: float for thompson sampling
             value_estimate: boolean if agent returns value estimate
             model_kwargs: dict, optional model initialization specifications
+            is_tf: boolean if model init is needed
+            test: boolean, if testing (only greedy sampling)
     """
 
     def __init__(
@@ -32,8 +34,10 @@ class Agent:
         value_estimate=False,
         input_shape=None,
         model_kwargs={},
+        is_tf=True,
         test=False,
     ):
+
         super(Agent, self).__init__
         #logging.basicConfig(
         #    filename=f"logging/agent.log", level=logging.DEBUG
@@ -42,7 +46,8 @@ class Agent:
         self.model = model(**self.model_kwargs)
 
         self.weights = weights
-        self.initialize_model(self.model, input_shape)
+        if is_tf:
+            self.initialize_model(self.model, input_shape)
         self.model.set_weights(weights)
 
         self.action_sampling_type = action_sampling_type
@@ -58,15 +63,13 @@ class Agent:
     def get_weights(self):
         return self.model.get_weights()
 
-    def initialize_model(self, model, input_shape):
-        if not (input_shape):
-            return model.get_weights()
+    def initialize_model(self, model, input_dummy):
+
         if hasattr(model, "tensorflow"):
             assert (
-                input_shape != None
+                input_dummy != None
             ), 'You have a tensorflow model with no input shape specified for weight initialization. \n Specify input_shape in "model_kwargs" or specify as False if not needed'
-        dummy = np.zeros(input_shape)
-        model(dummy)
+        model(input_dummy)
 
 
     # agent readout handler
@@ -90,7 +93,7 @@ class Agent:
                 # log prob of epsilon
                 if return_log_prob:
                     output["log_probability"] = np.asarray(
-                        [np.log(self.epsilon)] * logits.shape[0]
+                        [np.log(self.epsilon+0.00000001)] * logits.shape[0], dtype=np.float32
                         )
             else:
                 # log prob of 1-epsilon
@@ -100,22 +103,28 @@ class Agent:
                 action = np.asarray(action)
                 if return_log_prob:
                     output["log_probability"] = np.asarray(
-                        [np.log(1 - self.epsilon)] * logits.shape[0]
+                        [np.log(1 - self.epsilon+0.00000001)] * logits.shape[0], dtype=np.float32
                         )
             output["action"] = action
 
         elif self.action_sampling_type == "thompson":
             # q values
             logits = network_out["q_values"]
+            logits = tf.nn.softmax(logits)
+            action = tf.squeeze(tf.random.categorical(logits / self.temperature, 1)).numpy()
+            output["action"] = action
+            action = action.tolist()
             if tf.is_tensor(logits):
                 logits = logits.numpy()
-            logits = logits / self.temperature
-            action = tf.squeeze(tf.random.categorical(logits, 1))
-            output["action"] = action
             if return_log_prob:
-                output["log_probability"] = np.log(
-                    [probs[i][a] for i, a in zip(range(logits.shape[0]), action)]
-                )
+                if logits.shape[0] > 1:
+                    output["log_probability"] = np.log(
+                        [logits[i][a] for i, a in zip(range(logits.shape[0]), action)]
+                    )
+                else:
+                    output["log_probability"] = np.log(
+                        [logits[0][action]]
+                    )
 
         elif self.action_sampling_type == "continuous_normal_diagonal":
 
@@ -151,6 +160,7 @@ class Agent:
         else:
             # logging.warning(f'unsupported sampling method {self.actin_sampling_type}')
             raise NotImplemented
+
         # pass on value estimate if there
         if self.value_estimate:
             output["value_estimate"] = network_out["value_estimate"]
@@ -175,6 +185,7 @@ class Agent:
         model_out = self.model(x)
         q_values = model_out["q_values"]
         x = tf.gather(q_values, actions, batch_dims=1)
+        x = tf.expand_dims(x, axis=-1)
         return x
 
     def v(self, x):
@@ -183,11 +194,9 @@ class Agent:
         return v
 
     def flowing_log_prob(self, state, action, return_entropy=False):
-        output = {}
         action = tf.cast(action, dtype=tf.float32)
         network_out = self.model(state)
 
-        network_out = self.model(state)
         if self.action_sampling_type == 'continuous_normal_diagonal':
             mus, sigmas = network_out["mu"], network_out["sigma"]
             dist = tf.compat.v1.distributions.Normal(mus, sigmas)
@@ -216,7 +225,7 @@ class Agent:
                 entropy = -tf.reduce_sum(logits * tf.math.log(logits), axis=-1)
                 entropy = tf.expand_dims(entropy, -1)
                 return log_prob, entropy
-            return log_prop
+            return log_prob
 
 
         elif self.action_sampling_type == "discrete_policy":

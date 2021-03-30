@@ -1,4 +1,4 @@
-import gym
+initialimport gym
 import numpy as np
 import ray
 from really import SampleManager
@@ -63,7 +63,7 @@ if __name__ == "__main__":
         # and more
     }
 
-    # initilize
+    # initialize
     ray.init(log_to_driver=False)
     manager = SampleManager(**kwargs)
 

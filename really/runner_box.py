@@ -32,7 +32,7 @@ class RunnerBox:
         model_kwargs: dict, optional, model specificatins requried for initialization
         gamma: float, discount factor for monte carlo return, defaults to 0.99
         env_kwargs: dictionary, optional custom environment specifications
-        input_shape: shape or boolean, if model needs input shape for initial call, defaults to the shape of the envs reset state
+        input_shape: shape if model needs input shape for initial call, defaults to the shape of the envs reset state
     """
 
     def __init__(
@@ -78,7 +78,7 @@ class RunnerBox:
         data_agg["state_new"] = []
         data_agg["not_done"] = []
 
-        # initilize optional returns
+        # initialize optional returns
         for key in self.returns:
             data_agg[key] = []
 
