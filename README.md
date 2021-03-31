@@ -13,6 +13,21 @@ In the block course students are asked to implement deep RL algorithms with the 
 
 This framework is still under construction and can yet be optimized. If you run into errors or see ways to make something more efficient, please feel free to raise an issue or contact me dircetly (Charlie Lange, chalange@uos.de) and help make this framework better for everyone!
 
+## Installation 
+At best create a conda environment with the given environment.yml file / refer to the file for version specifications (important are: ray, gym, tensorflow, numpy, matplotlib, scipy, opencv).
+
+Additionall install the really and gridworld package as following:
+
+##### Really
+```console
+(ReAlly) yourname@device:~/your_path_to_really/ReAllY$ cd really
+(ReAlly) yourname@device:~/your_path_to_really/ReAllY/really$ pip install -e . 
+```
+##### Gridworlds
+```console
+(ReAlly) yourname@device:~/your_path_to_really/ReAllY$ cd gridworlds
+(ReAlly) yourname@device:~/your_path_to_really/ReAllY/gridworlds$ pip install -e . 
+```
 ## General Design
 
 -> insert graphic
@@ -40,13 +55,13 @@ The sample manager should be initalized from the main process.
 #### Initialization
 
     @args:
-        model: model Object
+        model: model Object, model: tf.keras.Model (or model imitating a tf model) returning dictionary with the possible keys: 'q_values' or 'policy' or 'mus' and 'sigmas' for continuous policies, optional 'value_estimate', containing tensors
         environment: string specifying gym environment or object of custom gym-like (implementing the same methods) environment
         num_parallel: int, number of how many agents to run in parall
-        total_steps: int, how many steps to collect for the exporence replay
-        returns: list of strings specifying what extra information (besides state, action, reward, new_state, not_done) is to be returned by the experience replay
-            supported are: 'value_estimate', 'log_prob', 'monte_carlo', defaults to empty list
-        action_sampling_type: string, type of sampling actions, supported are 'epsilon_greedy', 'thompson', 'discrete_policy' or 'continous_normal_diagonal'
+        total_steps: int, how many steps to collect for the experience replay
+        returns: list of strings specifying what is to be returned by the box
+            supported are: 'value_estimate', 'log_prob', 'monte_carlo'
+        actin_sampling_type: string, type of sampling actions, supported are 'epsilon_greedy', 'thompson', 'discrete_policy' or 'continuous_normal_diagonal'
 
     @kwargs:
         model_kwargs: dict, optional model initialization specifications
@@ -59,11 +74,13 @@ The sample manager should be initalized from the main process.
         num_steps: specifies the total number of steps to run on the environment for each runner
 
         gamma: float, discount factor for monte carlo return, defaults to 0.99
-        temperature**: float, temperature for thomson sampling, defaults to 1
+        temperature: float, temperature for thomson sampling, defaults to 1
         epsilon: epsilon for epsilon greedy sampling, defaults to 0.95
 
         remote_min_returns: int, minimum number of remote runner results to wait for, defaults to 10% of num_parallel
         remote_time_out: float, maximum amount of time (in seconds) to wait on the remote runner results, defaults to None
+
+        is_tf: boolean, if model is tensorflow model and neets initialization
  
 ##### Example:
 
@@ -127,6 +144,14 @@ The sample manager should be initalized from the main process.
      manager.load_model(path)
         -> loads the most recent model in the folder specified by path using tf.keras.models.load_model()
         returns: agent with loaded weights
+        
+ ##### Handling specifications
+     manager.set_temperature(temperature)
+     
+     manager.set_epsilon(epsilon)
+     
+     manager.set_env(env_kwargs)
+ 
         
  ##### Handling evaluation
       
