@@ -1,0 +1,5 @@
+please refer to the following link for another great solution (with more elaborate comments):
+
+https://github.com/MaBanser/DeepReinforcementLearning_2021/blob/main/LunarLanderContinuous.py
+Credits to: Marcel Banser
+Congrats and many thanks for sharing!

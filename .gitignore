@@ -18,7 +18,6 @@ progress_tabq
 progress_a2c
 grid_q.py
 progress_test
-sample_solutions
 *.log
 
 

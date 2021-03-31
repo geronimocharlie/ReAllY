@@ -1,0 +1,5 @@
+please refer to the following link for another great solution (with more elaborate comments):
+
+https://github.com/thoklei/ReAllY/blob/master/homework2.py
+Credits to: Thomas Klein, Nicolai Hermann and Malte Heyen
+Congrats to them and many thanks for sharing!
