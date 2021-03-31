@@ -37,7 +37,7 @@ class RunnerBox:
 
     def __init__(
         self, agent, model, environment, runner_position, returns=[], **kwargs
-        ):
+    ):
 
         self.env = environment
         self.runner_position = runner_position
@@ -47,8 +47,8 @@ class RunnerBox:
         self.return_value_estimate = False
         self.return_monte_carlo = False
 
-        self.discrete_env = kwargs['discrete_env']
-        kwargs.pop('discrete_env')
+        self.discrete_env = kwargs["discrete_env"]
+        kwargs.pop("discrete_env")
 
         # initialize default data agg
 
@@ -57,7 +57,7 @@ class RunnerBox:
                 self.return_log_prob = True
             if key == "value_estimate":
                 self.return_value_estimate = True
-                kwargs['value_estimate'] = True
+                kwargs["value_estimate"] = True
             if key == "monte_carlo":
                 self.return_monte_carlo = True
                 if "gamma" in kwargs.keys():
@@ -68,7 +68,6 @@ class RunnerBox:
         self.agent = agent(model, **kwargs)
         self.agent_kwargs = kwargs
         self.clear_box()
-
 
     def clear_box(self):
         data_agg = {}
@@ -83,7 +82,6 @@ class RunnerBox:
             data_agg[key] = []
 
         self.data_agg = data_agg
-
 
     def run_n_steps(self, num_steps, max_env=None):
         import tensorflow as tf
@@ -136,7 +134,6 @@ class RunnerBox:
             )
 
         return self.data_agg, self.runner_position
-
 
     def run_n_episodes(self, num_episodes, max_env=None):
         import tensorflow as tf

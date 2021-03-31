@@ -1,4 +1,4 @@
-initialimport gym
+import gym
 import numpy as np
 import ray
 from really import SampleManager
@@ -59,7 +59,7 @@ if __name__ == "__main__":
         "num_parallel": 2,
         "total_steps": 100,
         "model_kwargs": model_kwargs,
-        "env_kwargs" : env_kwargs
+        "env_kwargs": env_kwargs
         # and more
     }
 

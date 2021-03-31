@@ -27,7 +27,7 @@ class GridWorld_Global_Multi(gym.Env):
             "reward_position": (2, 3),
             "start_position": (0, 0),
             "reward": 10,
-            "step_penalty" : -0.5,
+            "step_penalty": -0.5,
             "max_time_steps": 100,
             "player_color": [0.9, 0.1, 0.1],
             "reward_color": [1, 1, 1],
@@ -51,7 +51,7 @@ class GridWorld_Global_Multi(gym.Env):
                 print(f"unsupported action {self.action_dict[k]} with key {k}")
                 raise KeyError
 
-        #assert self.config['window_size']%2==1, "the window size must be uneven"
+        # assert self.config['window_size']%2==1, "the window size must be uneven"
         self.transitions = {UP: (-1, 0), DOWN: (1, 0), RIGHT: (0, 1), LEFT: (0, -1)}
 
         # get info on grid
@@ -62,9 +62,8 @@ class GridWorld_Global_Multi(gym.Env):
         self.max_blocks = self.n_states - 1
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Discrete(self.n_states)
-        self.final_reward = self.config['reward']
-        self.step_penalty = self.config['step_penalty']
-
+        self.final_reward = self.config["reward"]
+        self.step_penalty = self.config["step_penalty"]
 
         # grid info for renderin
         self.reward_position = np.asarray(self.config["reward_position"])
@@ -73,12 +72,14 @@ class GridWorld_Global_Multi(gym.Env):
         self.position = tuple(self.start_position)
         screen = np.zeros((self.height, self.width, 3))
 
-        for i,block in enumerate(self.block_position):
-            if ((block==self.position).all()) or ((block==self.reward_position).all()):
+        for i, block in enumerate(self.block_position):
+            if ((block == self.position).all()) or (
+                (block == self.reward_position).all()
+            ):
                 print("Trying to block start position. Refused.")
             else:
                 screen[tuple(block)] = self.config["block_color"]
-            if i==self.max_blocks:
+            if i == self.max_blocks:
                 print("Maximum numper of blocks reached. Aborting positioning.")
                 break
         screen[tuple(self.reward_position)] = self.config["reward_color"]
@@ -89,7 +90,6 @@ class GridWorld_Global_Multi(gym.Env):
         # for some reason gym wants that
         self._seed = random.seed(1234)
 
-
     def step(self, action):
 
         assert self.action_space.contains(action)
@@ -97,7 +97,7 @@ class GridWorld_Global_Multi(gym.Env):
         off_x, off_y = self.transitions[action]
         new_position = self.move(off_x, off_y)
 
-        if not (np.any(np.all(new_position==self.block_position, axis=-1))):
+        if not (np.any(np.all(new_position == self.block_position, axis=-1))):
             self.position = new_position
 
         screen = self.basic_screen.copy()
@@ -111,8 +111,6 @@ class GridWorld_Global_Multi(gym.Env):
         # done if max time steps reached
         if self.t == self.max_time_steps:
             self.done = True
-
-
 
         return screen, self.step_penalty, self.done, None
 
@@ -132,7 +130,6 @@ class GridWorld_Global_Multi(gym.Env):
 
         return (x, y)
 
-
     def reset(self):
         self.position = tuple(self.start_position)
         self.done = False
@@ -141,11 +138,11 @@ class GridWorld_Global_Multi(gym.Env):
         screen[tuple(self.position)] = self.config["player_color"]
         return screen
 
-    def render(self, mode="human", close=False, size_wh=(500,900), show_view=False):
+    def render(self, mode="human", close=False, size_wh=(500, 900), show_view=False):
         screen = self.basic_screen.copy()
         screen[tuple(self.position)] = self.config["player_color"]
         cv2.imshow("GridWorld environment", screen)
         cv2.waitKey(100)
         if close:
-            print('closing')
+            print("closing")
             cv2.destroyAllWindows()

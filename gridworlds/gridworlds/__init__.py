@@ -3,6 +3,7 @@ from gridworlds.envs.gridworld import GridWorld
 from gridworlds.envs.gridworld_view import GridWorld_View
 from gridworlds.envs.gridworld_global import GridWorld_Global
 from gridworlds.envs.gridworld_global_multi import GridWorld_Global_Multi
+
 register(
     id="gridworld-v0",
     entry_point="gridworlds.envs:GridWorld",

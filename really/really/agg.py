@@ -7,7 +7,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 
 class Smoothing_aggregator:
-    def __init__(self, path, saving_after=100, aggregator_keys=["loss"], max_size=5, init_epoch=0):
+    def __init__(
+        self, path, saving_after=100, aggregator_keys=["loss"], max_size=5, init_epoch=0
+    ):
         self.aggregator_size = 0
         self.aggregator_max_size = max_size
         self.aggregator = {}
@@ -29,8 +31,8 @@ class Smoothing_aggregator:
         for k in kwargs.keys():
             if k in self.aggregator.keys():
                 self.aggregator[k].append(kwargs[k])
-                #print('agg shape')
-                #print(np.asarray(self.aggregator[k]).shape)
+                # print('agg shape')
+                # print(np.asarray(self.aggregator[k]).shape)
                 increased = True
             else:
                 print(
@@ -43,7 +45,9 @@ class Smoothing_aggregator:
 
         if self.aggregator_size >= self.aggregator_max_size:
             for k in kwargs.keys():
-                self.aggregator_vals[k].append(np.mean( [np.mean(i) for i in self.aggregator[k]]))
+                self.aggregator_vals[k].append(
+                    np.mean([np.mean(i) for i in self.aggregator[k]])
+                )
                 self.aggregator[k] = []
             self.aggregator_size = 0
             if not (self.reached_size):
