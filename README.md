@@ -30,7 +30,8 @@ Additionall install the really and gridworld package as following:
 ```
 ## General Design
 
--> insert graphic
+![General Design](really/really.PNG)
+
 
 ### Sample Mnager
 The sample manager manages collecting experience using remote runners. Therfore it has to be initialized with the specifications for the environment and the model used, how the agent should behave and what data needs to be collected. 
